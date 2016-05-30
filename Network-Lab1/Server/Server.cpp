@@ -11,7 +11,7 @@ typedef boost::asio::ip::udp udp;
 
 class TCP_Session : public enable_shared_from_this<TCP_Session>{
 public:
-	TCP_Session(tcp::socket tcp_socket/*, udp::socket udp_socket*/) : tcpSocket_(move(tcp_socket))/*, udpSocket_(move(udp_socket))*/{}
+	TCP_Session(tcp::socket tcp_socket/*, udp::socket udp_socket*/) : tcpSocket_(move(tcp_socket)/*, udpSocket_(move(udp_socket))*/){}
 
 	void start(){
 		cerr<<green<<"New connection from "
