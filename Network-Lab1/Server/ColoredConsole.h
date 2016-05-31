@@ -1,3 +1,7 @@
+#ifndef COLOREDCONSOLE_H_
+#define COLOREDCONSOLE_H_
+
+#ifdef _WIN32
 #pragma once
 #include <iostream>
 #include <windows.h>
@@ -50,3 +54,5 @@ operator<<(std::basic_ostream<_Elem, _Traits>& i, color& c)
 	SetConsoleTextAttribute(hStdout, c.m_color);
 	return i;
 }
+#endif //_WIN32
+#endif //COLOREDCONSOLE_H_

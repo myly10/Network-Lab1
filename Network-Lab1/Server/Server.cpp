@@ -3,85 +3,197 @@
 #include <memory>
 #include <utility>
 #include <boost/asio.hpp>
+#include <boost/bind.hpp>
 #include "ColoredConsole.h"
+#include <deque>
+#include <string>
 using namespace std;
 
 typedef boost::asio::ip::tcp tcp;
 typedef boost::asio::ip::udp udp;
 
-class TCP_Session : public enable_shared_from_this<TCP_Session>{
-public:
-	TCP_Session(tcp::socket tcp_socket/*, udp::socket udp_socket*/) : tcpSocket_(move(tcp_socket)/*, udpSocket_(move(udp_socket))*/){}
+class UDT_Packet {
+	shared_ptr<char> packet_;
 
-	void start(){
-		cerr<<green<<"New connection from "
-			<<tcpSocket_.remote_endpoint().address()<<":"<<tcpSocket_.remote_endpoint().port()<<" to "
-			<<tcpSocket_.local_endpoint().address()<<":"<<tcpSocket_.local_endpoint().port()
-			<<endl<<white;
-		TcpRead();
-		UdpRead();
+public:
+	boost::asio::deadline_timer timer;
+	int timeoutLength=1200; //ms
+	bool acked=false;
+	uint32_t length;
+	uint32_t id;
+
+	UDT_Packet(UDT_Packet &pkt) :
+		packet_(pkt.packet_),
+		timeoutLength(pkt.timeoutLength),
+		timer(pkt.timer.get_io_service(), boost::posix_time::millisec(timeoutLength)),
+		length(pkt.length),
+		id(pkt.id)
+	{}
+
+	UDT_Packet(boost::asio::io_service &io, uint32_t id, string &data, uint32_t flag) :
+		timer(io, boost::posix_time::millisec(timeoutLength)),
+		length(sizeof(uint32_t)*3+data.size()),
+		packet_(new char[sizeof(uint32_t)*3+data.size()]),
+		id(id)
+	{
+		auto pPacket=packet_.get();
+		*(uint32_t*)pPacket=id;
+		*(uint32_t*)(pPacket+sizeof(uint32_t))=flag;
+		*(uint32_t*)(pPacket+sizeof(uint32_t)*2)=data.size();
+		memcpy(pPacket+sizeof(uint32_t)*3, data.data(), data.size());
 	}
 
-private:
-	void TcpRead(){
+	~UDT_Packet() {
+		timer.cancel();
+	}
+
+	auto data() {
+		return packet_.get();
+	}
+};
+
+class UDT_Session : public enable_shared_from_this<UDT_Session> {
+	udp::socket udpSocket_;
+	boost::asio::io_service &io_;
+	deque<UDT_Packet> sendQueue;
+	uint32_t lastId, firstId;
+
+	void UdtEstablishConnection()
+	{
+		throw std::exception("The method or operation is not implemented.");
+	}
+
+
+	void sendPacket(UDT_Packet &pkt) {
+		auto self(shared_from_this());
+		udpSocket_.async_send(boost::asio::buffer(pkt.data(), pkt.length), [this, self, &pkt](boost::system::error_code ec, size_t length) {
+			if (!ec) {
+				pkt.timer.expires_from_now(boost::posix_time::millisec(pkt.timeoutLength));
+				pkt.timer.async_wait(bind(&UDT_Session::resendPacket, this, placeholders::_1, &pkt));
+			}
+			else {
+				throw exception((string("failed to send udt packet, ec=")+ec.message()).c_str());
+			}
+		});
+	}
+
+/*	void ackPacket() { //TODO
+		pkt->acked=true;
+		firstId=max(firstId, pkt->id);
+	}*/
+	
+	void resendPacket(const boost::system::error_code &ec, UDT_Packet *pkt) {
+		if (ec!=boost::asio::error::operation_aborted) {
+			sendPacket(*pkt);
+			//TODO
+		}
+	}
+
+	void send() {
+		for (UDT_Packet &pkt:sendQueue) {
+			if (pkt.acked) continue;
+			sendPacket(pkt);
+		}
+	}
+
+public:
+	UDT_Session(boost::asio::io_service &io, udp::endpoint &remoteEndpoint, uint32_t startId=0) :
+		io_(io),
+		firstId(startId),
+		lastId(startId),
+		udpSocket_(io, udp::v4())
+	{
+		udpSocket_.connect(remoteEndpoint);
+	}
+
+	void read() {
+
+	}
+
+	void write(string buf) {
+		sendQueue.emplace_back(io_, lastId++, move(buf), (uint32_t)'A');
+		send();
+	}
+};
+
+class TCP_Session : public enable_shared_from_this<TCP_Session>{
+	tcp::socket &tcpSocket_;
+	shared_ptr<UDT_Session> pUdt_;
+	static const int max_length=1024;
+	char data_[max_length];
+
+	void AsyncRead(){
 		auto self(shared_from_this());
 		tcpSocket_.async_read_some(boost::asio::buffer(data_, max_length), [this, self](boost::system::error_code ec, size_t length){
 			if (!ec){
 				cout<<"Received length="<<length<<endl;
-				TcpRead();
+				pUdt_->write(string(data_, length));
+				AsyncRead();
 			}
 			else if (ec==boost::asio::error::eof) {
+				cerr<<yellow
+					<<"Connection from "<<tcpSocket_.remote_endpoint().address()<<":"<<tcpSocket_.remote_endpoint().port()
+					<<" to "<<tcpSocket_.local_endpoint().address()<<":"<<tcpSocket_.local_endpoint().port()<<" closed"
+					<<endl<<white;
+			}
+			else {
 				cerr<<red
-					<<"Connection from "<<tcpSocket_.remote_endpoint().address()<<":"<<tcpSocket_.remote_endpoint().port()<<" to "
-					<<tcpSocket_.local_endpoint().address()<<":"<<tcpSocket_.local_endpoint().port()
-					<<" closed"<<endl<<white;
+					<<"Error occurred on connection from "<<tcpSocket_.remote_endpoint().address()<<":"<<tcpSocket_.remote_endpoint().port()
+					<<" to "<<tcpSocket_.local_endpoint().address()<<":"<<tcpSocket_.local_endpoint().port()
+					<<endl<<white;
 			}
-			UdpWrite();
 		});
 	}
 
-	void TcpWrite(){
+	void AsyncWrite(){
 		auto self(shared_from_this());
-		boost::asio::async_write(tcpSocket_, boost::asio::buffer(data_, max_length), [this, self](boost::system::error_code ec, size_t){
-			if (!ec){
+		tcpSocket_.async_write_some(boost::asio::buffer(data_, max_length), [this, self](boost::system::error_code ec, size_t){
+			if (!ec) {
+				AsyncWrite();
 			}
-			TcpWrite();
 		});
 	}
 
-	void UdpRead() {
 
+public:
+	TCP_Session(boost::asio::io_service &io, tcp::socket tcp_socket, udp::endpoint &udpRemoteEndpoint) :
+		tcpSocket_(move(tcp_socket)),
+		pUdt_(make_shared<UDT_Session>(io, udpRemoteEndpoint))
+	{}
+
+	void start(){
+		cerr<<green
+			<<"New connection from "<<tcpSocket_.remote_endpoint().address()<<":"<<tcpSocket_.remote_endpoint().port()
+			<<" to "<<tcpSocket_.local_endpoint().address()<<":"<<tcpSocket_.local_endpoint().port()
+			<<endl<<white;
+		AsyncRead();
+		pUdt_->read();
 	}
-
-	void UdpWrite() {
-
-	}
-
-	tcp::socket tcpSocket_;
-	udp::socket udpSocket_;
-	static const int max_length=1500;
-	char data_[max_length];
 };
 
-class UDT : enable_shared_from_this<UDT> {
+class UDT {
 public:
-	UDT(boost::asio::io_service &io, const boost::asio::ip::address listenAddr, const int listenPort, const boost::asio::ip::address remoteAddr, const int remotePort)
-		:udpSocket_(io, udp::v4()),
+	UDT(boost::asio::io_service &io, const boost::asio::ip::address listenAddr, const int listenPort, const boost::asio::ip::address remoteAddr, const int remotePort) :
+		io_(io),
 		listenSocket_(io),
-		listenAcceptor_(io, tcp::endpoint((listenAddr), listenPort))
+		listenAcceptor_(io, tcp::endpoint(listenAddr, listenPort)),
+		remoteEndpoint_(remoteAddr, remotePort)
 	{
 		doAcceptNewConnection();
 	}
 
 private:
+	boost::asio::io_service &io_;
 	tcp::socket listenSocket_;
-	udp::socket udpSocket_;
 	tcp::acceptor listenAcceptor_;
+	udp::endpoint remoteEndpoint_;
 
 	void doAcceptNewConnection(){
 		listenAcceptor_.async_accept(listenSocket_, [this](boost::system::error_code ec) {
-			if (!ec) make_shared<TCP_Session>(move(listenSocket_))->start();
-			else cerr<<red<<"Error: "<<ec.message()<<endl<<white;
+			if (!ec) {
+				make_shared<TCP_Session>(io_, move(listenSocket_), remoteEndpoint_)->start(); //TODO bug is here
+			}
+			else cerr<<red<< "Acceptor: " << ec.message()<<"\n"<<white;
 			doAcceptNewConnection();
 		});
 	}
@@ -98,8 +210,8 @@ int main(int argc, char* argv[]) {
 		io.run();
 	}
 	catch (exception& e) {
-		cerr <<red<< "Exception: \"" << e.what()<<"\"\n"<<white;
+		cerr <<red<< "Exception: " << e.what()<<"\n"<<white;
+		cin.get();
 	}
-//	cin.get();
 	return 0;
 }
