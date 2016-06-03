@@ -7,13 +7,19 @@
 #include "ColoredConsole.h"
 #include <deque>
 #include <string>
-using namespace std;
+#include <cstdint>
+#include <chrono>
+using std::cout;
+using std::cerr;
+using std::endl;
+using std::cin;
+using std::string;
 
 typedef boost::asio::ip::tcp tcp;
 typedef boost::asio::ip::udp udp;
 
 class UDT_Packet {
-	shared_ptr<char> packet_;
+	std::shared_ptr<char> packet_;
 
 public:
 	boost::asio::deadline_timer timer;
@@ -52,11 +58,20 @@ public:
 	}
 };
 
-class UDT_Session : public enable_shared_from_this<UDT_Session> {
+class UDT_Session : public std::enable_shared_from_this<UDT_Session> {
 	udp::socket udpSocket_;
 	boost::asio::io_service &io_;
-	deque<UDT_Packet> sendQueue;
+	std::deque<UDT_Packet> sendQueue;
 	uint32_t lastId, firstId;
+
+	void UdpConnectHandler(const boost::system::error_code &ec) {
+		if (!ec) {
+			UdtEstablishConnection(); //TODO
+		}
+		else {
+			throw std::exception((string("failed to set up UDP data channel, ec=")+ec.message()).c_str());
+		}
+	}
 
 	void UdtEstablishConnection()
 	{
@@ -69,18 +84,22 @@ class UDT_Session : public enable_shared_from_this<UDT_Session> {
 		udpSocket_.async_send(boost::asio::buffer(pkt.data(), pkt.length), [this, self, &pkt](boost::system::error_code ec, size_t length) {
 			if (!ec) {
 				pkt.timer.expires_from_now(boost::posix_time::millisec(pkt.timeoutLength));
-				pkt.timer.async_wait(bind(&UDT_Session::resendPacket, this, placeholders::_1, &pkt));
+				pkt.timer.async_wait(bind(&UDT_Session::resendPacket, this, std::placeholders::_1, &pkt));
 			}
 			else {
-				throw exception((string("failed to send udt packet, ec=")+ec.message()).c_str());
+				throw std::exception((string("failed to send udt packet, ec=")+ec.message()).c_str());
 			}
 		});
 	}
 
-/*	void ackPacket() { //TODO
-		pkt->acked=true;
-		firstId=max(firstId, pkt->id);
-	}*/
+	void ackPacket(UDT_Packet &pkt) {
+		pkt.acked=true;
+		firstId=std::max(firstId, pkt.id);
+		for (auto &pkti:sendQueue) {
+			if (pkti.id>pkt.id) break;
+			//TODO
+		}
+	}
 	
 	void resendPacket(const boost::system::error_code &ec, UDT_Packet *pkt) {
 		if (ec!=boost::asio::error::operation_aborted) {
@@ -103,7 +122,7 @@ public:
 		lastId(startId),
 		udpSocket_(io, udp::v4())
 	{
-		udpSocket_.connect(remoteEndpoint);
+		udpSocket_.async_connect(remoteEndpoint, std::bind(&UDT_Session::UdpConnectHandler, this, std::placeholders::_1));
 	}
 
 	void read() {
@@ -111,14 +130,14 @@ public:
 	}
 
 	void write(string buf) {
-		sendQueue.emplace_back(io_, lastId++, move(buf), (uint32_t)'A');
+		sendQueue.emplace_back(io_, lastId++, std::move(buf), (uint32_t)'A');
 		send();
 	}
 };
 
-class TCP_Session : public enable_shared_from_this<TCP_Session>{
-	tcp::socket &tcpSocket_;
-	shared_ptr<UDT_Session> pUdt_;
+class TCP_Session : public std::enable_shared_from_this<TCP_Session>{
+	tcp::socket tcpSocket_;
+	std::shared_ptr<UDT_Session> pUdt_;
 	static const int max_length=1024;
 	char data_[max_length];
 
@@ -156,9 +175,9 @@ class TCP_Session : public enable_shared_from_this<TCP_Session>{
 
 
 public:
-	TCP_Session(boost::asio::io_service &io, tcp::socket tcp_socket, udp::endpoint &udpRemoteEndpoint) :
-		tcpSocket_(move(tcp_socket)),
-		pUdt_(make_shared<UDT_Session>(io, udpRemoteEndpoint))
+	TCP_Session(boost::asio::io_service &io, tcp::socket tcp_socket, udp::endpoint udpRemoteEndpoint) :
+		tcpSocket_(std::move(tcp_socket)),
+		pUdt_(std::make_shared<UDT_Session>(io, udpRemoteEndpoint))
 	{}
 
 	void start(){
@@ -173,7 +192,7 @@ public:
 
 class UDT {
 public:
-	UDT(boost::asio::io_service &io, const boost::asio::ip::address listenAddr, const int listenPort, const boost::asio::ip::address remoteAddr, const int remotePort) :
+	UDT(boost::asio::io_service &io, const boost::asio::ip::address &listenAddr, const int listenPort, const boost::asio::ip::address &remoteAddr, const int remotePort) :
 		io_(io),
 		listenSocket_(io),
 		listenAcceptor_(io, tcp::endpoint(listenAddr, listenPort)),
@@ -191,9 +210,9 @@ private:
 	void doAcceptNewConnection(){
 		listenAcceptor_.async_accept(listenSocket_, [this](boost::system::error_code ec) {
 			if (!ec) {
-				make_shared<TCP_Session>(io_, move(listenSocket_), remoteEndpoint_)->start(); //TODO bug is here
+				std::make_shared<TCP_Session>(io_, std::move(listenSocket_), remoteEndpoint_)->start(); //TODO bug is here
 			}
-			else cerr<<red<< "Acceptor: " << ec.message()<<"\n"<<white;
+			else std::cerr<<red<< "Acceptor: " << ec.message()<<"\n"<<white;
 			doAcceptNewConnection();
 		});
 	}
@@ -209,7 +228,7 @@ int main(int argc, char* argv[]) {
 		UDT s(io, boost::asio::ip::address::from_string(argv[1]), atoi(argv[2]), boost::asio::ip::address::from_string(argv[3]), atoi(argv[4]));
 		io.run();
 	}
-	catch (exception& e) {
+	catch (std::exception& e) {
 		cerr <<red<< "Exception: " << e.what()<<"\n"<<white;
 		cin.get();
 	}
