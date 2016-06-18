@@ -164,7 +164,7 @@ public:
 			tcpSocket_.async_connect(serverEndpoint, [this](const boost::system::error_code &ec) {
 				if (ec) {
 #ifdef _DEBUG
-					throw std::exception(string("Error: ")+ec.message());
+					throw std::exception(string("Error: ")+ec.message()); //TODO bug here
 #endif // _DEBUG
 				}
 			});
