@@ -22,13 +22,25 @@ struct ttt {
 int main() {
 	try {
 		boost::asio::io_service io;
-		udp::socket udpSock(io, udp::endpoint(boost::asio::ip::address::from_string("172.20.0.1"), 8000));
+		udp::socket udpSock2(io, udp::endpoint(boost::asio::ip::address::from_string("172.20.0.1"), 8000)), udpSock(io);
 		udp::endpoint targetEndpoint(boost::asio::ip::address::from_string("172.20.0.2"), 7000);
 		cout<<"Press to start..."<<endl;
 		cin.get();
-		ttt t;
-		size_t len=udpSock.send_to(boost::asio::buffer((char*)&t, 12), targetEndpoint);
-		cout<<len<<endl;
+		char s[1024];
+		udp::endpoint remoteEndpoint;
+		size_t len=udpSock2.receive_from(boost::asio::buffer(s, 1024), remoteEndpoint);
+		cout<<"From "<<udpSock2.local_endpoint().address()<<":"<<udpSock2.local_endpoint().port()<<" to "<<remoteEndpoint.address()<<":"<<remoteEndpoint.port()<<endl;
+		udpSock.connect(remoteEndpoint);
+		udpSock.send(boost::asio::buffer("acked"));
+#ifdef _DEBUG
+		cout<<"Done."<<endl<<len<<endl<<string(s, len)<<endl;
+#endif
+		len=udpSock2.receive_from(boost::asio::buffer(s, 1024), remoteEndpoint);
+		cout<<"From "<<udpSock2.local_endpoint().address()<<":"<<udpSock2.local_endpoint().port()<<" to "<<remoteEndpoint.address()<<":"<<remoteEndpoint.port()<<endl;
+		len=udpSock.receive(boost::asio::buffer(s, 1024));
+		cout<<len<<endl<<string(s, len)<<endl;
+		len=udpSock.receive(boost::asio::buffer(s, 1024));
+		cout<<len<<endl<<string(s, len)<<endl;
 	}catch (std::exception e){
 		cerr<<e.what()<<endl;
 	}
