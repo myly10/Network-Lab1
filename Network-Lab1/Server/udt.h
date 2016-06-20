@@ -160,6 +160,8 @@ public:
 	UDT_Session(boost::asio::io_service &io, udp::socket udpSocket, tcp::socket tcp_socket, udp::endpoint &endpoint, uint32_t startId=0, bool accepting=false) :
 		io_(io),
 		recvQueueHeadId(startId),
+		lastSentId(startId),
+		firstSentId(startId), // Use this id to avoid transmission of initial send id
 		udpSocket_(std::move(udpSocket)),
 		tcpSocket_(std::move(tcp_socket))
 	{
