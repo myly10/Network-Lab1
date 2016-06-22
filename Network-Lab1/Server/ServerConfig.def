@@ -1,3 +1,4 @@
 #pragma once
 
-const tcp::endpoint serverEndpoint(boost::asio::ip::address::from_string("127.0.0.1"), 8000);
+const tcp::endpoint serverEndpoint(boost::asio::ip::address::from_string("10.6.0.10"), 80);
+const int maxPayloadLength=1024;
